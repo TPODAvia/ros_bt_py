@@ -5,6 +5,9 @@ from ros_bt_py.node_config import NodeConfig
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 import time
+import subprocess
+
+
 
 # This is a TEST NODE
 @define_bt_node(NodeConfig(
@@ -32,6 +35,8 @@ class GenerateSuccessNode(Node):
 
     def _do_untick(self):
         return NodeMsg.IDLE
+
+
 
 # This is a TEST NODE
 @define_bt_node(NodeConfig(
@@ -87,27 +92,50 @@ class PublishCmdVelNode(Node):
     def _do_untick(self):
         return NodeMsg.IDLE
 
+
+
 @define_bt_node(NodeConfig(
     version="1.0.0",
-    options={},
+    options={'joint_positions': list},  # Option for specifying joint positions
     inputs={'task': str},
     outputs={'task': str},
     max_children=0))
 class JointsPositionNode(Node):
-    """Handles joints_position commands."""
+    """Handles joints_position commands with multiple options using subprocess."""
     def _do_setup(self):
         rospy.loginfo("JointsPositionNode: Setup complete")
 
     def _do_tick(self):
         task = self.inputs['task']
+        joint_positions = self.options.get('joint_positions', None)
+
         if task == "joints_position":
-            rospy.loginfo("JointsPositionNode: Executing joints_position command")
-            # Example logic for joint positions
-            joint_positions = [0, 0, 0, 0, 0, 0]  # Default example
-            rospy.loginfo(f"Setting joint positions to: {joint_positions}")
-            # Update task
-            self.outputs['task'] = "success"
-            return NodeMsg.SUCCEEDED
+            rospy.loginfo("JointsPositionNode: Executing joints_position command using subprocess")
+            try:
+                # Base command
+                command = ['rosrun', 'moveit_python', 'task_generator.py', 'fr10', 'joints_position']
+                
+                # Add joint positions if specified
+                if joint_positions and len(joint_positions) == 6:
+                    command.extend(map(str, joint_positions))
+                    rospy.loginfo(f"JointsPositionNode: Using joint positions: {joint_positions}")
+                else:
+                    rospy.loginfo("JointsPositionNode: Using default joint positions")
+
+                # Run the command
+                result = subprocess.run(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=True
+                )
+                rospy.loginfo(f"JointsPositionNode: Command executed successfully:\n{result.stdout}")
+                self.outputs['task'] = "success"
+                return NodeMsg.SUCCEEDED
+            except subprocess.CalledProcessError as e:
+                rospy.logerr(f"JointsPositionNode: Command failed with error:\n{e.stderr}")
+                return NodeMsg.IDLE
         else:
             return NodeMsg.IDLE
 
@@ -121,27 +149,39 @@ class JointsPositionNode(Node):
         return NodeMsg.IDLE
 
 
+
 @define_bt_node(NodeConfig(
     version="1.0.0",
-    options={},
+    options={'end_target': str},  # Option for specifying the end coordinate
     inputs={'task': str},
     outputs={'task': str},
     max_children=0))
 class EndCoordinateNode(Node):
-    """Handles end_coordinate commands."""
+    """Handles end_coordinate commands dynamically using subprocess."""
     def _do_setup(self):
         rospy.loginfo("EndCoordinateNode: Setup complete")
 
     def _do_tick(self):
         task = self.inputs['task']
+        end_target = self.options.get('end_target', 'tf_end')  # Default to 'tf_end'
+
         if task == "end_coordinate":
-            rospy.loginfo("EndCoordinateNode: Executing end_coordinate command")
-            # Example logic for end coordinates
-            end_target = "tf_end"  # Example target
-            rospy.loginfo(f"Setting end coordinates to: {end_target}")
-            # Update task
-            self.outputs['task'] = "success"
-            return NodeMsg.SUCCEEDED
+            rospy.loginfo(f"EndCoordinateNode: Executing end_coordinate command with target '{end_target}'")
+            try:
+                # Construct and run the rosrun command dynamically
+                result = subprocess.run(
+                    ['rosrun', 'moveit_python', 'task_generator.py', 'fr10', 'end_coordinate', end_target],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=True
+                )
+                rospy.loginfo(f"EndCoordinateNode: Command executed successfully:\n{result.stdout}")
+                self.outputs['task'] = "success"
+                return NodeMsg.SUCCEEDED
+            except subprocess.CalledProcessError as e:
+                rospy.logerr(f"EndCoordinateNode: Command failed with error:\n{e.stderr}")
+                return NodeMsg.IDLE
         else:
             return NodeMsg.IDLE
 
@@ -154,124 +194,129 @@ class EndCoordinateNode(Node):
     def _do_untick(self):
         return NodeMsg.IDLE
 
+
+
 @define_bt_node(NodeConfig(
     version="1.0.0",
-    options={},
+    options={
+        'object_name': str,
+        'reference_frame': str,
+        'pose': list
+    },
     inputs={'task': str},
-    outputs={'task': str},
-    max_children=0))
-class EndCoordinateNode(Node):
-    """Handles end_coordinate commands."""
-    def _do_setup(self):
-        rospy.loginfo("EndCoordinateNode: Setup complete")
-
-    def _do_tick(self):
-        task = self.inputs['task']
-        if task == "end_coordinate":
-            rospy.loginfo("EndCoordinateNode: Executing end_coordinate command")
-            # Example logic for end coordinates
-            end_target = "tf_end"  # Example target
-            rospy.loginfo(f"Setting end coordinates to: {end_target}")
-            # Update task
-            self.outputs['task'] = "success"
-            return NodeMsg.SUCCEEDED
-        else:
-            return NodeMsg.IDLE
-
-    def _do_shutdown(self):
-        pass
-
-    def _do_reset(self):
-        return NodeMsg.IDLE
-
-    def _do_untick(self):
-        return NodeMsg.IDLE
-    
-from moveit_commander import PlanningSceneInterface
-from geometry_msgs.msg import PoseStamped
-
-@define_bt_node(NodeConfig(
-    version="1.0.0",
-    options={},
-    inputs={'task': str, 'object_name': str, 'reference_frame': str, 'pose': list},
     outputs={'task': str},
     max_children=0))
 class ObjectManipulationNode(Node):
-    """Handles spawn_object, attach_object, detach_object, remove_object, and clear_scene tasks."""
+    """Handles spawn_object, attach_object, detach_object, and remove_object tasks."""
     def _do_setup(self):
-        self.scene = PlanningSceneInterface()
-        rospy.sleep(2)  # Allow some time for the planning scene to initialize
+        rospy.loginfo("ObjectManipulationNode: Setup complete")
 
     def _do_tick(self):
         task = self.inputs['task']
-        object_name = self.inputs.get('object_name', '')
-        reference_frame = self.inputs.get('reference_frame', 'world')
-        pose = self.inputs.get('pose', [0, 0, 0])
+        object_name = self.options.get('object_name', '')
+        reference_frame = self.options.get('reference_frame', 'world')
+        pose = self.options.get('pose', [0, 0, 0])
 
-        if task == "spawn_object":
-            if object_name:
-                pose_stamped = PoseStamped()
-                pose_stamped.header.frame_id = reference_frame
-                pose_stamped.pose.position.x = pose[0]
-                pose_stamped.pose.position.y = pose[1]
-                pose_stamped.pose.position.z = pose[2]
-                pose_stamped.pose.orientation.w = 1.0  # Default orientation
-                self.scene.add_box(object_name, pose_stamped, size=(0.1, 0.1, 0.1))
-                rospy.loginfo(f"Spawned object '{object_name}' at {pose}")
-                self.outputs['task'] = "success"
-                return NodeMsg.SUCCEEDED
+        try:
+            if task == "spawn_object":
+                return self._spawn_object(object_name, reference_frame, pose)
+            elif task == "attach_object":
+                return self._attach_object(object_name, reference_frame)
+            elif task == "detach_object":
+                return self._detach_object(object_name, reference_frame)
+            elif task == "remove_object":
+                return self._remove_object(object_name)
             else:
-                rospy.logwarn("Spawn object failed: No object name provided")
+                rospy.logwarn(f"ObjectManipulationNode: Unknown task '{task}'")
                 return NodeMsg.IDLE
+        except Exception as e:
+            rospy.logerr(f"ObjectManipulationNode: Error during task '{task}': {e}")
+            return NodeMsg.IDLE
 
-        elif task == "attach_object":
-            if object_name and reference_frame:
-                self.scene.attach_box(reference_frame, object_name)
-                rospy.loginfo(f"Attached object '{object_name}' to '{reference_frame}'")
-                self.outputs['task'] = "success"
-                return NodeMsg.SUCCEEDED
-            else:
-                rospy.logwarn("Attach object failed: Missing object name or reference frame")
-                return NodeMsg.IDLE
+    def _spawn_object(self, object_name, reference_frame, pose):
+        if not object_name:
+            rospy.logwarn("ObjectManipulationNode: No object name provided for spawn_object task")
+            return NodeMsg.IDLE
 
-        elif task == "detach_object":
-            if object_name and reference_frame:
-                self.scene.detach_box(reference_frame, object_name)
-                rospy.loginfo(f"Detached object '{object_name}' from '{reference_frame}'")
-                self.outputs['task'] = "success"
-                return NodeMsg.SUCCEEDED
-            else:
-                rospy.logwarn("Detach object failed: Missing object name or reference frame")
-                return NodeMsg.IDLE
-
-        elif task == "remove_object":
-            if object_name:
-                self.scene.remove_world_object(object_name)
-                rospy.loginfo(f"Removed object '{object_name}' from the scene")
-                self.outputs['task'] = "success"
-                return NodeMsg.SUCCEEDED
-            else:
-                rospy.logwarn("Remove object failed: No object name provided")
-                return NodeMsg.IDLE
-
-        elif task == "clear_scene":
-            self.scene.remove_world_object()
-            rospy.loginfo("Cleared all objects from the planning scene")
+        try:
+            rospy.loginfo(f"Spawning object '{object_name}' at pose {pose} in frame '{reference_frame}'")
+            command = [
+                'rosrun', 'moveit_python', 'task_generator.py', 'fr10',
+                'spawn_object', object_name, str(pose[0]), str(pose[1]), str(pose[2])
+            ]
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+            rospy.loginfo(f"ObjectManipulationNode: Spawn object command executed successfully:\n{result.stdout}")
             self.outputs['task'] = "success"
             return NodeMsg.SUCCEEDED
+        except subprocess.CalledProcessError as e:
+            rospy.logerr(f"ObjectManipulationNode: Failed to spawn object:\n{e.stderr}")
+            return NodeMsg.IDLE
 
-        else:
-            rospy.logwarn(f"Task '{task}' not recognized in ObjectManipulationNode")
+    def _attach_object(self, object_name, reference_frame):
+        if not object_name or not reference_frame:
+            rospy.logwarn("ObjectManipulationNode: Missing object name or reference frame for attach_object task")
+            return NodeMsg.IDLE
+
+        try:
+            rospy.loginfo(f"Attaching object '{object_name}' to frame '{reference_frame}'")
+            command = [
+                'rosrun', 'moveit_python', 'task_generator.py', 'fr10',
+                'attach_object', object_name, reference_frame
+            ]
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+            rospy.loginfo(f"ObjectManipulationNode: Attach object command executed successfully:\n{result.stdout}")
+            self.outputs['task'] = "success"
+            return NodeMsg.SUCCEEDED
+        except subprocess.CalledProcessError as e:
+            rospy.logerr(f"ObjectManipulationNode: Failed to attach object:\n{e.stderr}")
+            return NodeMsg.IDLE
+
+    def _detach_object(self, object_name, reference_frame):
+        if not object_name or not reference_frame:
+            rospy.logwarn("ObjectManipulationNode: Missing object name or reference frame for detach_object task")
+            return NodeMsg.IDLE
+
+        try:
+            rospy.loginfo(f"Detaching object '{object_name}' from frame '{reference_frame}'")
+            command = [
+                'rosrun', 'moveit_python', 'task_generator.py', 'fr10',
+                'detach_object', object_name, reference_frame
+            ]
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+            rospy.loginfo(f"ObjectManipulationNode: Detach object command executed successfully:\n{result.stdout}")
+            self.outputs['task'] = "success"
+            return NodeMsg.SUCCEEDED
+        except subprocess.CalledProcessError as e:
+            rospy.logerr(f"ObjectManipulationNode: Failed to detach object:\n{e.stderr}")
+            return NodeMsg.IDLE
+
+    def _remove_object(self, object_name):
+        if not object_name:
+            rospy.logwarn("ObjectManipulationNode: No object name provided for remove_object task")
+            return NodeMsg.IDLE
+
+        try:
+            rospy.loginfo(f"Removing object '{object_name}'")
+            command = [
+                'rosrun', 'moveit_python', 'task_generator.py', 'fr10', 'remove_object', object_name
+            ]
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+            rospy.loginfo(f"ObjectManipulationNode: Remove object command executed successfully:\n{result.stdout}")
+            self.outputs['task'] = "success"
+            return NodeMsg.SUCCEEDED
+        except subprocess.CalledProcessError as e:
+            rospy.logerr(f"ObjectManipulationNode: Failed to remove object:\n{e.stderr}")
             return NodeMsg.IDLE
 
     def _do_shutdown(self):
-        pass
+        rospy.loginfo("ObjectManipulationNode: Shutting down")
 
     def _do_reset(self):
         return NodeMsg.IDLE
 
     def _do_untick(self):
         return NodeMsg.IDLE
+
 
 
 @define_bt_node(NodeConfig(
@@ -281,26 +326,36 @@ class ObjectManipulationNode(Node):
     outputs={'task': str},
     max_children=0))
 class GripperControlNode(Node):
-    """Handles gripper_open and gripper_close tasks."""
+    """Handles gripper_open and gripper_close tasks using subprocess."""
     def _do_setup(self):
-        self.gripper_pub = rospy.Publisher('/gripper_cmd', String, queue_size=1)
-        rospy.sleep(1)  # Allow time for the publisher to initialize
         rospy.loginfo("GripperControlNode: Ready to receive tasks")
 
     def _do_tick(self):
         task = self.inputs['task']
+
         if task == "gripper_open":
-            self.gripper_pub.publish("open")
-            rospy.loginfo("GripperControlNode: Gripper opened")
-            self.outputs['task'] = "success"
-            return NodeMsg.SUCCEEDED
+            return self._execute_gripper_command('gripper_open')
         elif task == "gripper_close":
-            self.gripper_pub.publish("close")
-            rospy.loginfo("GripperControlNode: Gripper closed")
-            self.outputs['task'] = "success"
-            return NodeMsg.SUCCEEDED
+            return self._execute_gripper_command('gripper_close')
         else:
             rospy.logwarn(f"GripperControlNode: Unknown task '{task}'")
+            return NodeMsg.IDLE
+
+    def _execute_gripper_command(self, command):
+        try:
+            rospy.loginfo(f"GripperControlNode: Executing '{command}' command")
+            result = subprocess.run(
+                ['rosrun', 'moveit_python', 'task_generator.py', 'fr10', command],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            )
+            rospy.loginfo(f"GripperControlNode: Command '{command}' executed successfully:\n{result.stdout}")
+            self.outputs['task'] = "success"
+            return NodeMsg.SUCCEEDED
+        except subprocess.CalledProcessError as e:
+            rospy.logerr(f"GripperControlNode: Command '{command}' failed with error:\n{e.stderr}")
             return NodeMsg.IDLE
 
     def _do_shutdown(self):
@@ -312,47 +367,51 @@ class GripperControlNode(Node):
     def _do_untick(self):
         return NodeMsg.IDLE
 
+
+
 @define_bt_node(NodeConfig(
     version="1.0.0",
-    options={},
-    inputs={'task': str, 'pipeline_name': str, 'planner_name': str},
+    options={
+        'pipeline_name': str,  # Motion planning pipeline (e.g., OMPL, PILZ)
+        'planner_name': str   # Specific planner (e.g., RRTConnect, LIN)
+    },
+    inputs={'task': str},
     outputs={'task': str},
     max_children=0))
 class MotionPipelineNode(Node):
-    """Handles choosing motion planning pipeline and follow mode."""
+    """Handles choosing motion planning pipeline using subprocess."""
     def _do_setup(self):
-        # Assume a service or topic to configure motion planning pipeline
-        self.pipeline_pub = rospy.Publisher('/motion_pipeline_config', String, queue_size=1)
-        self.follow_mode_pub = rospy.Publisher('/follow_mode', String, queue_size=1)
-        rospy.sleep(1)  # Allow time for the publishers to initialize
-        rospy.loginfo("MotionPipelineNode: Ready to configure motion planning pipeline and follow mode")
+        rospy.loginfo("MotionPipelineNode: Ready to configure motion planning pipeline")
 
     def _do_tick(self):
         task = self.inputs['task']
-        pipeline_name = self.inputs.get('pipeline_name', '')
-        planner_name = self.inputs.get('planner_name', '')
+        pipeline_name = self.options.get('pipeline_name', '')
+        planner_name = self.options.get('planner_name', '')
 
         if task == "choose_pipeline":
-            if pipeline_name and planner_name:
-                # Send pipeline and planner configuration
-                config_message = f"Pipeline: {pipeline_name}, Planner: {planner_name}"
-                self.pipeline_pub.publish(config_message)
-                rospy.loginfo(f"MotionPipelineNode: Configured motion pipeline with {config_message}")
-                self.outputs['task'] = "success"
-                return NodeMsg.SUCCEEDED
-            else:
-                rospy.logwarn("MotionPipelineNode: Missing pipeline or planner name for choose_pipeline task")
-                return NodeMsg.IDLE
-
-        elif task == "choose_follow_mode":
-            # Set the robot to follow mode
-            self.follow_mode_pub.publish("follow")
-            rospy.loginfo("MotionPipelineNode: Configured robot to follow mode")
-            self.outputs['task'] = "success"
-            return NodeMsg.SUCCEEDED
-
+            return self._execute_pipeline_command(pipeline_name, planner_name)
         else:
             rospy.logwarn(f"MotionPipelineNode: Unknown task '{task}'")
+            return NodeMsg.IDLE
+
+    def _execute_pipeline_command(self, pipeline_name, planner_name):
+        if not pipeline_name or not planner_name:
+            rospy.logwarn("MotionPipelineNode: Missing pipeline or planner name for choose_pipeline task")
+            return NodeMsg.IDLE
+
+        try:
+            rospy.loginfo(f"MotionPipelineNode: Configuring pipeline '{pipeline_name}' with planner '{planner_name}'")
+            # Construct and execute the subprocess command
+            command = [
+                'rosrun', 'moveit_python', 'task_generator.py', 'fr10',
+                'choose_pipeline', pipeline_name, planner_name
+            ]
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+            rospy.loginfo(f"MotionPipelineNode: Command executed successfully:\n{result.stdout}")
+            self.outputs['task'] = "success"
+            return NodeMsg.SUCCEEDED
+        except subprocess.CalledProcessError as e:
+            rospy.logerr(f"MotionPipelineNode: Failed to configure pipeline:\n{e.stderr}")
             return NodeMsg.IDLE
 
     def _do_shutdown(self):
@@ -365,13 +424,11 @@ class MotionPipelineNode(Node):
         return NodeMsg.IDLE
 
 
-import os
-import json
 
 @define_bt_node(NodeConfig(
     version="1.0.0",
-    options={},
-    inputs={'task': str, 'file_name': str},
+    options={'file_name': str},  # Option for specifying a file name
+    inputs={'task': str},
     outputs={'task': str},
     max_children=0))
 class JsonFileManagerNode(Node):
@@ -381,66 +438,40 @@ class JsonFileManagerNode(Node):
 
     def _do_tick(self):
         task = self.inputs['task']
-        file_name = self.inputs.get('file_name', '')
+        file_name = self.options.get('file_name', '')
 
         if task == "check_json_files":
-            return self._check_json_files()
+            return self._execute_command(['check_json_files'])
         elif task == "delete_json_sim_content":
-            return self._delete_json_sim_content(file_name)
+            if file_name:
+                return self._execute_command(['delete_json_sim_content', file_name])
+            else:
+                rospy.logwarn("JsonFileManagerNode: No file name provided for delete_json_sim_content task")
+                return NodeMsg.IDLE
         elif task == "delete_json_temp":
-            return self._delete_json_temp()
+            return self._execute_command(['delete_json_temp'])
         else:
             rospy.logwarn(f"JsonFileManagerNode: Unknown task '{task}'")
             return NodeMsg.IDLE
 
-    def _check_json_files(self):
-        json_files = [f for f in os.listdir('.') if f.endswith('.json')]
-        if json_files:
-            rospy.loginfo(f"JsonFileManagerNode: JSON files found: {json_files}")
+    def _execute_command(self, args):
+        try:
+            # Construct the rosrun command dynamically
+            command = ['rosrun', 'moveit_python', 'task_generator.py', 'fr10'] + args
+            rospy.loginfo(f"JsonFileManagerNode: Executing command: {' '.join(command)}")
+            result = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            )
+            rospy.loginfo(f"JsonFileManagerNode: Command executed successfully:\n{result.stdout}")
             self.outputs['task'] = "success"
             return NodeMsg.SUCCEEDED
-        else:
-            rospy.loginfo("JsonFileManagerNode: No JSON files found")
-            self.outputs['task'] = "no_files"
+        except subprocess.CalledProcessError as e:
+            rospy.logerr(f"JsonFileManagerNode: Command failed with error:\n{e.stderr}")
             return NodeMsg.IDLE
-
-    def _delete_json_sim_content(self, file_name):
-        if not file_name or not os.path.isfile(file_name):
-            rospy.logwarn(f"JsonFileManagerNode: File '{file_name}' does not exist")
-            return NodeMsg.IDLE
-
-        try:
-            with open(file_name, 'r+') as f:
-                data = json.load(f)
-                if isinstance(data, dict) and "simulation_content" in data:
-                    data["simulation_content"] = None
-                    f.seek(0)
-                    f.truncate()
-                    json.dump(data, f, indent=4)
-                    rospy.loginfo(f"JsonFileManagerNode: Cleared simulation content in '{file_name}'")
-                    self.outputs['task'] = "success"
-                    return NodeMsg.SUCCEEDED
-                else:
-                    rospy.loginfo(f"JsonFileManagerNode: No 'simulation_content' key in '{file_name}'")
-                    return NodeMsg.IDLE
-        except Exception as e:
-            rospy.logerr(f"JsonFileManagerNode: Error while processing '{file_name}': {e}")
-            return NodeMsg.IDLE
-
-    def _delete_json_temp(self):
-        temp_files = [f for f in os.listdir('.') if f.endswith('.json') and "temp" in f]
-        if not temp_files:
-            rospy.loginfo("JsonFileManagerNode: No temporary JSON files found")
-            return NodeMsg.IDLE
-
-        for temp_file in temp_files:
-            try:
-                os.remove(temp_file)
-                rospy.loginfo(f"JsonFileManagerNode: Deleted temporary file '{temp_file}'")
-            except Exception as e:
-                rospy.logerr(f"JsonFileManagerNode: Failed to delete '{temp_file}': {e}")
-        self.outputs['task'] = "success"
-        return NodeMsg.SUCCEEDED
 
     def _do_shutdown(self):
         rospy.loginfo("JsonFileManagerNode: Shutting down")
