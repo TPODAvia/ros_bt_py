@@ -229,3 +229,74 @@ class TopicPublisher(Leaf):
 
     def _do_untick(self):
         return NodeMsg.IDLE
+
+
+@define_bt_node(
+    NodeConfig(
+        version="1.0.0",
+        options={
+            "topic_type": type,        # Type of the ROS topic (e.g., std_msgs.String)
+            "topic_name": str,        # Name of the topic to publish to
+            "default_message": dict,  # Default message content if no input is provided
+            "rate_hz": float          # Publishing rate in Hz (optional)
+        },
+        inputs={"message": OptionRef("topic_type")},  # Input for message to publish
+        outputs={"message": OptionRef("topic_type")},  # No outputs for the publisher
+        max_children=0,
+    )
+)
+class CustomTopicPublisher(Leaf):
+    """Custom topic publisher node for ROS behavior trees.
+
+    This node publishes a message to a specified topic. If an input message is
+    provided, it is published. Otherwise, a default message is published.
+
+    - Supports a publishing rate controlled by the 'rate_hz' option.
+    """
+
+    def _do_setup(self):
+        # Initialize the publisher
+        self._publisher = rospy.Publisher(
+            self.options["topic_name"],
+            self.options["topic_type"],
+            latch=True,
+            queue_size=1,
+        )
+        self._rate = rospy.Rate(self.options.get("rate_hz", 1.0))  # Default rate is 1 Hz
+        self._default_msg = self.options["default_message"]
+        return NodeMsg.IDLE
+
+    def _do_tick(self):
+        """Called periodically to publish messages."""
+        # Check if the input message has been updated
+        if self.inputs.is_updated("message"):
+            msg = self.inputs["message"]
+        else:
+            # Use default message if no input is provided
+            msg = self.options["topic_type"](**self._default_msg)
+
+        # Publish the message
+        self._publisher.publish(msg)
+        rospy.loginfo(f"Published message to {self.options['topic_name']}: {msg}")
+
+        # Sleep for the specified rate
+        self._rate.sleep()
+        return NodeMsg.SUCCEEDED
+
+    def _do_shutdown(self):
+        """Shutdown the publisher and clean up resources."""
+        try:
+            if self._publisher is not None:
+                self._publisher.unregister()
+                rospy.loginfo(f"Unregistered publisher on {self.options['topic_name']}")
+        except AttributeError:
+            self.logwarn("Cannot unregister as no publisher is available.")
+        self._publisher = None
+
+    def _do_reset(self):
+        """Reset the node to its initial state."""
+        return NodeMsg.IDLE
+
+    def _do_untick(self):
+        """Called when the node is unticked."""
+        return NodeMsg.IDLE

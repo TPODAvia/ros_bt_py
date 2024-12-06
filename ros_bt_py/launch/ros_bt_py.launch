@@ -52,7 +52,8 @@
 
        <arg name="additional_node_modules" default="future_advanced_nodes.learning, future_advanced_nodes.doing," />
   -->
-  <arg name="additional_node_modules" default="" />
+  <arg name="additional_node_modules" default="ros_bt_py.nodes.task_generator_node," />
+  <!-- <arg name="additional_node_modules" default="" /> -->
 
   <arg name="load_default_tree" default="false" />
   <!-- loads the default tree in permissive mode which can mitigate some errors in the saved tree -->
@@ -108,8 +109,7 @@
     </group>
 
     <!-- behavior tree backend, responsible for executing the tree -->
-    <node name="tree_node" pkg="ros_bt_py" type="tree_node.py" output="log"
-          respawn="false">
+    <node name="tree_node" pkg="ros_bt_py" type="tree_node.py" output="log" respawn="false">
       <!-- a list of modules that are availble in the editor web interface -->
       <rosparam param="node_modules" subst_value="True">
         [
