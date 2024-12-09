@@ -148,7 +148,7 @@ class JointsPositionNode(Node):
             rospy.logerr("JointsPositionNode: Invalid robot input")
             return NodeMsg.FAILED
 
-        joint_positions = self.options.get('joint_positions', None)
+        joint_positions = self.options['joint_positions']
         command = ['rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'], 'joints_position']
         if joint_positions and len(joint_positions) == 6:
             command.extend(map(str, joint_positions))
@@ -174,7 +174,7 @@ class JointsPositionNode(Node):
 
 @define_bt_node(NodeConfig(
     version="1.0.0",
-    options={'end_target': str},  # Option for specifying the end coordinate
+    options={'end_target': str, 'pose': list},  # Option for specifying the end coordinate
     inputs={'task': str, 'robot': str},
     outputs={'task': str, 'robot': str},
     max_children=0))
@@ -194,19 +194,37 @@ class EndCoordinateNode(Node):
             rospy.logerr("EndCoordinateNode: Invalid robot input")
             return NodeMsg.FAILED
 
-        end_target = self.options.get('end_target', None)
-        if not end_target:
+        end_target = self.options['end_target']
+        if end_target in ("", "foo") or end_target is None:
             rospy.logerr("EndCoordinateNode: No end_target specified")
             return NodeMsg.FAILED
 
-        command = ['rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'], 'end_coordinate', end_target]
+        # Check if the pose is provided
+        pose = self.options['pose']
+        if pose:
+            # Ensure pose is a list of length 7 (representing position and orientation)
+            if len(pose) != 7:
+                rospy.logwarn("EndCoordinateNode: Pose should have 7 parameters (x, y, z, qx, qy, qz, qw)")
+                return NodeMsg.FAILED
+            # If pose is provided, construct the command with the pose values
+            command = [
+                'rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'],
+                'end_coordinate', end_target] + [str(p) for p in pose]
+        else:
+            # If pose is not provided, run the command with just the target
+            command = [
+                'rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'],
+                'end_coordinate', end_target]
+
+        # Execute the subprocess command
         success, output, error = execute_subprocess(command, log_context="EndCoordinateNode")
-        
+
         if success:
             self.outputs['task'] = "success"
             self.outputs['robot'] = self.inputs['robot']
             return NodeMsg.SUCCEEDED
         else:
+            rospy.logerr(f"EndCoordinateNode: Command failed with error:\n{error}")
             return NodeMsg.FAILED
 
     def _do_shutdown(self):
@@ -232,7 +250,7 @@ class EndCoordinateNode(Node):
     outputs={'task': str, 'robot': str},
     max_children=0))
 class ObjectManipulationNode(Node):
-    """Handles spawn_object, attach_object, detach_object, and remove_object tasks."""
+    """Handles spawn_object, attach_object, detach_object, clear_scene and remove_object tasks."""
     def _do_setup(self):
         rospy.loginfo("ObjectManipulationNode: Setup complete")
 
@@ -246,10 +264,10 @@ class ObjectManipulationNode(Node):
             rospy.logerr("ObjectManipulationNode: Invalid robot input")
             return NodeMsg.FAILED
 
-        mode = self.options.get('mode', None)
-        object_name = self.options.get('object_name', None)
-        reference_frame = self.options.get('reference_frame', None)
-        pose = self.options.get('pose', None)
+        mode = self.options['mode']
+        object_name = self.options['object_name']
+        reference_frame = self.options['reference_frame']
+        pose = self.options['pose']
 
         if mode == "spawn_object":
             return self._spawn_object(object_name, reference_frame, pose)
@@ -266,14 +284,17 @@ class ObjectManipulationNode(Node):
             return NodeMsg.FAILED
 
     def _spawn_object(self, object_name, reference_frame, pose):
-        if not object_name or not pose or len(pose) < 3:
-            rospy.logwarn("ObjectManipulationNode: Missing parameters for spawn_object task")
+        if object_name in ("", "foo") or object_name is None:
+            rospy.logwarn("ObjectManipulationNode: Missing parameters for spawn_object object_name")
+            return NodeMsg.FAILED
+        
+        if not pose or len(pose) != 7:
+            rospy.logwarn("ObjectManipulationNode: Missing parameters for pose")
             return NodeMsg.FAILED
 
         command = [
             'rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'],
-            'spawn_object', object_name, str(pose[0]), str(pose[1]), str(pose[2])
-        ]
+            'spawn_object', object_name] + [str(p) for p in pose]
         success, output, error = execute_subprocess(command, log_context="ObjectManipulationNode: spawn_object")
         
         if success:
@@ -336,7 +357,7 @@ class ObjectManipulationNode(Node):
         else:
             return NodeMsg.FAILED
 
-    def _remove_object(self):
+    def _clear_scene(self):
 
         command = ['rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'], 'clear_scene']
         success, output, error = execute_subprocess(command, log_context="ObjectManipulationNode: clear_scene")
@@ -380,7 +401,7 @@ class GripperControlNode(Node):
             rospy.logerr("GripperControlNode: Invalid robot input")
             return NodeMsg.FAILED
 
-        mode = self.options.get('mode', None)
+        mode = self.options['mode']
         
         if mode == "gripper_open":
             return self._execute_gripper_command('gripper_open')
@@ -444,11 +465,15 @@ class MotionPipelineNode(Node):
             rospy.logerr("MotionPipelineNode: Invalid robot input")
             return NodeMsg.FAILED
 
-        pipeline_name = self.options.get('pipeline_name', None)
-        planner_name = self.options.get('planner_name', None)
+        pipeline_name = self.options['pipeline_name']
+        planner_name = self.options['planner_name']
 
-        if not pipeline_name or not planner_name:
-            rospy.logwarn("MotionPipelineNode: Missing pipeline or planner name for choose_pipeline task")
+        if pipeline_name in ("", "foo") or pipeline_name is None:
+            rospy.logwarn("MotionPipelineNode: Missing pipeline name for choose_pipeline task")
+            return NodeMsg.FAILED
+
+        if planner_name in ("", "foo") or planner_name is None:
+            rospy.logwarn("MotionPipelineNode: Missing planner name for choose_pipeline task")
             return NodeMsg.FAILED
 
         try:
@@ -504,8 +529,12 @@ class JsonFileManagerNode(Node):
             rospy.logerr("JsonFileManagerNode: Invalid robot input")
             return NodeMsg.FAILED
 
-        file_name = self.options.get('file_name', None)
-        mode = self.options.get('mode', None)
+        file_name = self.options['file_name']
+        mode = self.options['mode']
+
+        if file_name in ("", "foo") or file_name is None:
+            rospy.logerr("JsonFileManagerNode: Invalid file_name")
+            return NodeMsg.FAILED
 
         if mode == "check_json_files":
             return self._execute_command(['check_json_files'], "JsonFileManagerNode: check_json_files")
