@@ -262,7 +262,8 @@ class CustomTopicPublisher(Leaf):
             latch=True,
             queue_size=1,
         )
-        self._rate = rospy.Rate(self.options.get("rate_hz", 1.0))  # Default rate is 1 Hz
+        if self.options["rate_hz"] > 0:
+            self._rate = rospy.Rate(self.options["rate_hz"])  # Default rate is 1 Hz
         self._default_msg = self.options["default_message"]
         return NodeMsg.IDLE
 

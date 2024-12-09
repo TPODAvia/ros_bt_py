@@ -7,6 +7,34 @@ from std_msgs.msg import String
 import time
 import subprocess
 
+def execute_subprocess(command, log_context=""):
+    """
+    Executes a subprocess command with standardized logging and error handling.
+    
+    Args:
+        command (list): The command to run as a list of strings.
+        log_context (str): A context string for better log messages.
+    
+    Returns:
+        tuple: (success (bool), output (str), error (str))
+    """
+    try:
+        rospy.loginfo(f"{log_context}: Executing command: {' '.join(command)}")
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True
+        )
+        rospy.loginfo(f"{log_context}: Command executed successfully:\n{result.stdout}")
+        return True, result.stdout, ""
+    except subprocess.CalledProcessError as e:
+        rospy.logerr(f"{log_context}: Command failed with error:\n{e.stderr}")
+        return False, "", e.stderr
+    except Exception as e:
+        rospy.logerr(f"{log_context}: Unexpected error occurred:\n{e}")
+        return False, "", str(e)
 
 
 # This is a TEST NODE
@@ -16,14 +44,18 @@ import subprocess
     inputs={},
     outputs={'task': str, 'robot': str},
     max_children=4))
-class GenerateSuccessNode(Node):
+class TaskStartNode(Node):
     """Generates the initial task that the pipeline will execute."""
     def _do_setup(self):
         pass
 
     def _do_tick(self):
         # Set the initial task. This could be something like "success".
-        self.outputs['robot'] = self.options['robot_name'] if self.options['robot_name'] is not None else "None"
+        if self.options['robot_name'] in ("", "foo") or self.options['robot_name'] is None:
+            rospy.logerr(f"TaskStartNode: robot_name need to be renamed")
+            return NodeMsg.FAILED
+        
+        self.outputs['robot'] = self.options['robot_name']
         self.outputs['task'] = "success"
         rospy.loginfo("TaskGeneratorNode: Starting pipeline with 'success' task")
         return NodeMsg.SUCCEEDED
@@ -107,38 +139,26 @@ class JointsPositionNode(Node):
         rospy.loginfo("JointsPositionNode: Setup complete")
 
     def _do_tick(self):
-        previous_task = self.inputs['task'] if self.inputs['task'] is not None else None
+        previous_task = self.inputs['task']
         if previous_task != "success":
+            rospy.logerr("JointsPositionNode: Previous task not successful")
             return NodeMsg.FAILED
-        
-        joint_positions = self.options['joint_positions'] if self.options['joint_positions'] is not None else None
-       
-        rospy.loginfo("JointsPositionNode: Executing joints_position command using subprocess")
-        try:
-            # Base command
-            command = ['rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'], 'joints_position']
-            
-            # Add joint positions if specified
-            if joint_positions and len(joint_positions) == 6:
-                command.extend(map(str, joint_positions))
-                rospy.loginfo(f"JointsPositionNode: Using joint positions: {command}")
-            else:
-                rospy.loginfo(f"JointsPositionNode: Using default joint positions: {command}")
 
-            # Run the command
-            result = subprocess.run(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=True
-            )
-            rospy.loginfo(f"JointsPositionNode: Command executed successfully:\n{result.stdout}")
+        if self.inputs['robot'] in ("", "foo") or self.inputs['robot'] is None:
+            rospy.logerr("JointsPositionNode: Invalid robot input")
+            return NodeMsg.FAILED
+
+        joint_positions = self.options.get('joint_positions', None)
+        command = ['rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'], 'joints_position']
+        if joint_positions and len(joint_positions) == 6:
+            command.extend(map(str, joint_positions))
+
+        success, output, error = execute_subprocess(command, log_context="JointsPositionNode")
+        if success:
             self.outputs['task'] = "success"
             self.outputs['robot'] = self.inputs['robot']
             return NodeMsg.SUCCEEDED
-        except Exception as e:
-            rospy.logerr(f"JointsPositionNode: Command failed with error:\n{e}")
+        else:
             return NodeMsg.FAILED
 
     def _do_shutdown(self):
@@ -165,31 +185,28 @@ class EndCoordinateNode(Node):
 
 
     def _do_tick(self):
-
-        previous_task = self.inputs['task'] if self.inputs['task'] is not None else None
+        previous_task = self.inputs['task']
         if previous_task != "success":
+            rospy.logerr("EndCoordinateNode: Previous task not successful")
             return NodeMsg.FAILED
+
+        if self.inputs['robot'] in ("", "foo") or self.inputs['robot'] is None:
+            rospy.logerr("EndCoordinateNode: Invalid robot input")
+            return NodeMsg.FAILED
+
+        end_target = self.options.get('end_target', None)
+        if not end_target:
+            rospy.logerr("EndCoordinateNode: No end_target specified")
+            return NodeMsg.FAILED
+
+        command = ['rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'], 'end_coordinate', end_target]
+        success, output, error = execute_subprocess(command, log_context="EndCoordinateNode")
         
-        end_target = self.options['end_target'] if self.options['end_target'] is not None else None
-        
-        try:
-            command = ['rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'], 'end_coordinate', end_target]
-            rospy.loginfo(f"EndCoordinateNode: Executing end_coordinate: '{command}'")
-            
-            # Construct and run the rosrun command dynamically
-            result = subprocess.run(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=True
-            )
-            rospy.loginfo(f"EndCoordinateNode: Command executed successfully:\n{result.stdout}")
+        if success:
             self.outputs['task'] = "success"
             self.outputs['robot'] = self.inputs['robot']
             return NodeMsg.SUCCEEDED
-        except Exception as e:
-            rospy.logerr(f"EndCoordinateNode: Command failed with error:\n{e}")
+        else:
             return NodeMsg.FAILED
 
     def _do_shutdown(self):
@@ -220,109 +237,115 @@ class ObjectManipulationNode(Node):
         rospy.loginfo("ObjectManipulationNode: Setup complete")
 
     def _do_tick(self):
-        
-        previous_task = self.inputs['task'] if self.inputs['task'] is not None else None
+        previous_task = self.inputs['task']
         if previous_task != "success":
+            rospy.logerr("ObjectManipulationNode: Previous task not successful")
             return NodeMsg.FAILED
-        
-        mode =            self.options['mode']              if self.options['mode'] is not None else None
-        object_name =     self.options['object_name']       if self.options['object_name'] is not None else None # ""
-        reference_frame = self.options['reference_frame']   if self.options['reference_frame'] is not None else None # 'world' 
-        pose =            self.options['pose']              if self.options['pose'] is not None else None # [0, 0, 0]
 
-        try:
-            if mode == "spawn_object":
-                return self._spawn_object(object_name, reference_frame, pose)
-            elif mode == "attach_object":
-                return self._attach_object(object_name, reference_frame)
-            elif mode == "detach_object":
-                return self._detach_object(object_name, reference_frame)
-            elif mode == "remove_object":
-                return self._remove_object(object_name)
-            else:
-                rospy.logwarn(f"ObjectManipulationNode: Unknown task '{mode}'")
-                return NodeMsg.FAILED
-        except Exception as e:
-            rospy.logerr(f"ObjectManipulationNode: Error during task '{mode}': {e}")
+        if self.inputs['robot'] in ("", "foo") or self.inputs['robot'] is None:
+            rospy.logerr("ObjectManipulationNode: Invalid robot input")
+            return NodeMsg.FAILED
+
+        mode = self.options.get('mode', None)
+        object_name = self.options.get('object_name', None)
+        reference_frame = self.options.get('reference_frame', None)
+        pose = self.options.get('pose', None)
+
+        if mode == "spawn_object":
+            return self._spawn_object(object_name, reference_frame, pose)
+        elif mode == "attach_object":
+            return self._attach_object(object_name, reference_frame)
+        elif mode == "detach_object":
+            return self._detach_object(object_name, reference_frame)
+        elif mode == "remove_object":
+            return self._remove_object(object_name)
+        elif mode == "clear_scene":
+            return self._clear_scene()
+        else:
+            rospy.logwarn(f"ObjectManipulationNode: Unknown task '{mode}'")
             return NodeMsg.FAILED
 
     def _spawn_object(self, object_name, reference_frame, pose):
-        if not object_name:
-            rospy.logwarn("ObjectManipulationNode: No object name provided for spawn_object task")
+        if not object_name or not pose or len(pose) < 3:
+            rospy.logwarn("ObjectManipulationNode: Missing parameters for spawn_object task")
             return NodeMsg.FAILED
 
-        try:
-            rospy.loginfo(f"Spawning object '{object_name}' at pose {pose} in frame '{reference_frame}'")
-            command = [
-                'rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'],
-                'spawn_object', object_name, str(pose[0]), str(pose[1]), str(pose[2])
-            ]
-            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
-            rospy.loginfo(f"ObjectManipulationNode: Spawn object command executed successfully:\n{result.stdout}")
+        command = [
+            'rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'],
+            'spawn_object', object_name, str(pose[0]), str(pose[1]), str(pose[2])
+        ]
+        success, output, error = execute_subprocess(command, log_context="ObjectManipulationNode: spawn_object")
+        
+        if success:
             self.outputs['task'] = "success"
             self.outputs['robot'] = self.inputs['robot']
             return NodeMsg.SUCCEEDED
-        except Exception as e:
-            rospy.logerr(f"ObjectManipulationNode: Failed to spawn object:\n{e}")
+        else:
             return NodeMsg.FAILED
 
     def _attach_object(self, object_name, reference_frame):
         if not object_name or not reference_frame:
-            rospy.logwarn("ObjectManipulationNode: Missing object name or reference frame for attach_object task")
+            rospy.logwarn("ObjectManipulationNode: Missing parameters for attach_object task")
             return NodeMsg.FAILED
 
-        try:
-            rospy.loginfo(f"Attaching object '{object_name}' to frame '{reference_frame}'")
-            command = [
-                'rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'],
-                'attach_object', object_name, reference_frame
-            ]
-            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
-            rospy.loginfo(f"ObjectManipulationNode: Attach object command executed successfully:\n{result.stdout}")
+        command = [
+            'rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'],
+            'attach_object', object_name, reference_frame
+        ]
+        success, output, error = execute_subprocess(command, log_context="ObjectManipulationNode: attach_object")
+        
+        if success:
             self.outputs['task'] = "success"
             self.outputs['robot'] = self.inputs['robot']
             return NodeMsg.SUCCEEDED
-        except Exception as e:
-            rospy.logerr(f"ObjectManipulationNode: Failed to attach object:\n{e}")
+        else:
             return NodeMsg.FAILED
 
     def _detach_object(self, object_name, reference_frame):
         if not object_name or not reference_frame:
-            rospy.logwarn("ObjectManipulationNode: Missing object name or reference frame for detach_object task")
+            rospy.logwarn("ObjectManipulationNode: Missing parameters for detach_object task")
             return NodeMsg.FAILED
 
-        try:
-            rospy.loginfo(f"Detaching object '{object_name}' from frame '{reference_frame}'")
-            command = [
-                'rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'],
-                'detach_object', object_name, reference_frame
-            ]
-            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
-            rospy.loginfo(f"ObjectManipulationNode: Detach object command executed successfully:\n{result.stdout}")
+        command = [
+            'rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'],
+            'detach_object', object_name, reference_frame
+        ]
+        success, output, error = execute_subprocess(command, log_context="ObjectManipulationNode: detach_object")
+        
+        if success:
             self.outputs['task'] = "success"
             self.outputs['robot'] = self.inputs['robot']
             return NodeMsg.SUCCEEDED
-        except Exception as e:
-            rospy.logerr(f"ObjectManipulationNode: Failed to detach object:\n{e}")
+        else:
             return NodeMsg.FAILED
 
     def _remove_object(self, object_name):
         if not object_name:
-            rospy.logwarn("ObjectManipulationNode: No object name provided for remove_object task")
+            rospy.logwarn("ObjectManipulationNode: Missing object name for remove_object task")
             return NodeMsg.FAILED
 
-        try:
-            rospy.loginfo(f"Removing object '{object_name}'")
-            command = [
-                'rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'], 'remove_object', object_name
-            ]
-            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
-            rospy.loginfo(f"ObjectManipulationNode: Remove object command executed successfully:\n{result.stdout}")
+        command = [
+            'rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'], 'remove_object', object_name
+        ]
+        success, output, error = execute_subprocess(command, log_context="ObjectManipulationNode: remove_object")
+        
+        if success:
             self.outputs['task'] = "success"
             self.outputs['robot'] = self.inputs['robot']
             return NodeMsg.SUCCEEDED
-        except Exception as e:
-            rospy.logerr(f"ObjectManipulationNode: Failed to remove object:\n{e}")
+        else:
+            return NodeMsg.FAILED
+
+    def _remove_object(self):
+
+        command = ['rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'], 'clear_scene']
+        success, output, error = execute_subprocess(command, log_context="ObjectManipulationNode: clear_scene")
+        
+        if success:
+            self.outputs['task'] = "success"
+            self.outputs['robot'] = self.inputs['robot']
+            return NodeMsg.SUCCEEDED
+        else:
             return NodeMsg.FAILED
 
     def _do_shutdown(self):
@@ -348,12 +371,16 @@ class GripperControlNode(Node):
         rospy.loginfo("GripperControlNode: Ready to receive tasks")
 
     def _do_tick(self):
-        
-        previous_task = self.inputs['task'] if self.inputs['task'] is not None else None
+        previous_task = self.inputs['task']
         if previous_task != "success":
+            rospy.logerr("GripperControlNode: Previous task not successful")
             return NodeMsg.FAILED
-        
-        mode = self.options['mode'] if self.options['mode'] is not None else None
+
+        if self.inputs['robot'] in ("", "foo") or self.inputs['robot'] is None:
+            rospy.logerr("GripperControlNode: Invalid robot input")
+            return NodeMsg.FAILED
+
+        mode = self.options.get('mode', None)
         
         if mode == "gripper_open":
             return self._execute_gripper_command('gripper_open')
@@ -366,17 +393,18 @@ class GripperControlNode(Node):
     def _execute_gripper_command(self, command):
         try:
             rospy.loginfo(f"GripperControlNode: Executing '{command}' command")
-            result = subprocess.run(
+            success, output, error = execute_subprocess(
                 ['rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'], command],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=True
+                log_context=f"GripperControlNode: {command}"
             )
-            rospy.loginfo(f"GripperControlNode: Command '{command}' executed successfully:\n{result.stdout}")
-            self.outputs['task'] = "success"
-            self.outputs['robot'] = self.inputs['robot']
-            return NodeMsg.SUCCEEDED
+            if success:
+                rospy.loginfo(f"GripperControlNode: Command '{command}' executed successfully:\n{output}")
+                self.outputs['task'] = "success"
+                self.outputs['robot'] = self.inputs['robot']
+                return NodeMsg.SUCCEEDED
+            else:
+                rospy.logerr(f"GripperControlNode: Command '{command}' failed with error:\n{error}")
+                return NodeMsg.FAILED
         except Exception as e:
             rospy.logerr(f"GripperControlNode: Command '{command}' failed with error:\n{e}")
             return NodeMsg.FAILED
@@ -407,37 +435,42 @@ class MotionPipelineNode(Node):
         rospy.loginfo("MotionPipelineNode: Ready to configure motion planning pipeline")
 
     def _do_tick(self):
-        
-        previous_task = self.inputs['task'] if self.inputs['task'] is not None else None
+        previous_task = self.inputs['task']
         if previous_task != "success":
+            rospy.logerr("MotionPipelineNode: Previous task not successful")
             return NodeMsg.FAILED
-        
-        pipeline_name = self.options['pipeline_name'] if self.options['pipeline_name'] is not None else None
-        planner_name = self.options['planner_name'] if self.options['planner_name'] is not None else None
 
-        return self._execute_pipeline_command(pipeline_name, planner_name)
+        if self.inputs['robot'] in ("", "foo") or self.inputs['robot'] is None:
+            rospy.logerr("MotionPipelineNode: Invalid robot input")
+            return NodeMsg.FAILED
 
+        pipeline_name = self.options.get('pipeline_name', None)
+        planner_name = self.options.get('planner_name', None)
 
-    def _execute_pipeline_command(self, pipeline_name, planner_name):
         if not pipeline_name or not planner_name:
             rospy.logwarn("MotionPipelineNode: Missing pipeline or planner name for choose_pipeline task")
             return NodeMsg.FAILED
 
         try:
             rospy.loginfo(f"MotionPipelineNode: Configuring pipeline '{pipeline_name}' with planner '{planner_name}'")
-            # Construct and execute the subprocess command
-            command = [
-                'rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'],
-                'choose_pipeline', pipeline_name, planner_name
-            ]
-            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
-            rospy.loginfo(f"MotionPipelineNode: Command executed successfully:\n{result.stdout}")
-            self.outputs['task'] = "success"
-            self.outputs['robot'] = self.inputs['robot']
-            return NodeMsg.SUCCEEDED
+            # Use the helper function to handle the subprocess
+            success, output, error = execute_subprocess(
+                ['rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot'], 'choose_pipeline', pipeline_name, planner_name],
+                log_context="MotionPipelineNode: choose_pipeline"
+            )
+
+            if success:
+                rospy.loginfo(f"MotionPipelineNode: Command executed successfully:\n{output}")
+                self.outputs['task'] = "success"
+                self.outputs['robot'] = self.inputs['robot']
+                return NodeMsg.SUCCEEDED
+            else:
+                rospy.logerr(f"MotionPipelineNode: Command failed with error:\n{error}")
+                return NodeMsg.FAILED
         except Exception as e:
-            rospy.logerr(f"MotionPipelineNode: Failed to configure pipeline:\n{e}")
+            rospy.logerr(f"MotionPipelineNode: Error during pipeline configuration:\n{e}")
             return NodeMsg.FAILED
+
 
     def _do_shutdown(self):
         rospy.loginfo("MotionPipelineNode: Shutting down")
@@ -462,46 +495,42 @@ class JsonFileManagerNode(Node):
         rospy.loginfo("JsonFileManagerNode: Ready to manage JSON files")
 
     def _do_tick(self):
-        
-        previous_task = self.inputs['task'] if self.inputs['task'] is not None else None
+        previous_task = self.inputs['task']
         if previous_task != "success":
+            rospy.logerr("JsonFileManagerNode: Previous task not successful")
             return NodeMsg.FAILED
-        
-        file_name = self.options['file_name'] if self.options['file_name'] is not None else None
-        mode = self.options['mode'] if self.options['mode'] is not None else None
-        
+
+        if self.inputs['robot'] in ("", "foo") or self.inputs['robot'] is None:
+            rospy.logerr("JsonFileManagerNode: Invalid robot input")
+            return NodeMsg.FAILED
+
+        file_name = self.options.get('file_name', None)
+        mode = self.options.get('mode', None)
+
         if mode == "check_json_files":
-            return self._execute_command(['check_json_files'])
+            return self._execute_command(['check_json_files'], "JsonFileManagerNode: check_json_files")
         elif mode == "delete_json_sim_content":
             if file_name:
-                return self._execute_command(['delete_json_sim_content', file_name])
+                return self._execute_command(['delete_json_sim_content', file_name], "JsonFileManagerNode: delete_json_sim_content")
             else:
                 rospy.logwarn("JsonFileManagerNode: No file name provided for delete_json_sim_content task")
                 return NodeMsg.FAILED
         elif mode == "delete_json_temp":
-            return self._execute_command(['delete_json_temp'])
+            return self._execute_command(['delete_json_temp'], "JsonFileManagerNode: delete_json_temp")
         else:
             rospy.logwarn(f"JsonFileManagerNode: Unknown mode '{mode}'")
             return NodeMsg.FAILED
 
-    def _execute_command(self, args):
-        try:
-            # Construct the rosrun command dynamically
-            command = ['rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot']] + args
-            rospy.loginfo(f"JsonFileManagerNode: Executing command: {' '.join(command)}")
-            result = subprocess.run(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=True
-            )
-            rospy.loginfo(f"JsonFileManagerNode: Command executed successfully:\n{result.stdout}")
+    def _execute_command(self, args, log_context):
+        command = ['rosrun', 'moveit_python', 'task_generator.py', self.inputs['robot']] + args
+        success, output, error = execute_subprocess(command, log_context=log_context)
+
+        if success:
             self.outputs['task'] = "success"
             self.outputs['robot'] = self.inputs['robot']
             return NodeMsg.SUCCEEDED
-        except Exception as e:
-            rospy.logerr(f"JsonFileManagerNode: Command failed with error:\n{e}")
+        else:
+            rospy.logerr(f"{log_context}: Command failed with error:\n{error}")
             return NodeMsg.FAILED
 
     def _do_shutdown(self):
